@@ -1,0 +1,217 @@
+---
+title: "Homework-3"
+author: "Lindley Slipetz"
+date: "7/11/2021"
+output: pdf_document
+---
+
+For this homework, I will be using the Childhood adversity and traumatic stress among inpatients at a psychiatric hospital in the Baltimore area from 1993-1995. The data include diagnoses, psychological symptoms, physical and sexual abuse, post-traumatic stress disorder, self-destructive behavior, and demographic data. I will be predicting suicidality (an ordered variable) from gender, race, self-harm, SES, mood disorder diagnosis, history of neglect, positive affect, and psychoticism.
+
+I'm loading the data and packages.
+
+```{r load, warning = FALSE, message = FALSE}
+#install.packages("brant")
+#install.packages("patchwork")
+require(brant) # for brant test
+require(ggplot2)
+require(MASS) # for polr() & mvrnorm()
+require(patchwork) # for combining graphs
+require(tidyverse)
+full_data <- read.table(file = 'G:\\My Drive\\ICPSR\\ML\\HW_2\\36168-0001-Data.tsv', sep = '\t', header = TRUE)
+```
+
+Now, I'm going to turn race into a binary variable (it's currently white, black, and other. There are very few observations in the other category, so I'm turning it into a binary variable of white and other).
+
+```{r race}
+full_data <- full_data %>%
+  mutate(race = case_when(
+    RACE == 0 ~ 0,
+    RACE == 1 ~ 1,
+    RACE == 3 ~ 1
+  ))
+```
+
+Here, I subset the data to only the variables I'm interested in.
+
+```{r subset}
+subset_data <- full_data %>%
+  select(SISDB_SUIC, SEX, race, SISDB_SHARM, SES, MOODDX, NEGLECT, PASUM, SCL_PSY )
+```
+
+Now I'm going to look at the amount of missing data and figure out what I'm going to do.
+
+```{r NA_check}
+df <- as.data.frame(
+  cbind(
+    lapply(
+      lapply(subset_data, is.na), sum)
+    )
+  )
+
+rownames(subset(df, df$V1 != 0))
+```
+
+Okay. "SISDB_SUIC", "race", "SISDB_SHARM", "PASUM", and "SCL_PSY" all have missing data. Let's see how much of problem it is.
+
+```{r NA_sum}
+sum(is.na(subset_data$SISDB_SUIC))
+sum(is.na(subset_data$race))
+sum(is.na(subset_data$SISDB_SHARM))
+sum(is.na(subset_data$PASUM))
+sum(is.na(subset_data$SCL_PSY))
+```
+
+That's not that much missing data (at least to me). I think we'd be safe to just omit the data with NA.
+
+```{r complete}
+complete_data <- na.omit(subset_data)
+```
+
+Now let's try OLS with our data.
+
+```{r reg}
+ols <- lm(complete_data$SISDB_SUIC ~ complete_data$SEX + complete_data$race + complete_data$SISDB_SHARM + complete_data$SES + complete_data$MOODDX + complete_data$NEGLECT + complete_data$PASUM + complete_data$SCL_PSY)
+summary(ols)
+```
+
+SES is significant with positive coefficient meaning that lower SES is associated with higher suicidality (the scale used for SES has higher scores meaning lower SES). The neglect scale score has a significant negative coefficient meaning that as childhood neglect increases, suicidality decreases. That's interesting. There is also a significant positive coefficient for positive affect. This means that those interviewed who reported more frequent happiness are more likely to have attempted suicide. Again, these are not relationships you'd expect to find. Let's see how the ordered model does.
+
+```{r order}
+out1 <- polr(as.ordered(complete_data$SISDB_SUIC) ~ complete_data$SEX + complete_data$race + complete_data$SISDB_SHARM + complete_data$SES + complete_data$MOODDX + complete_data$NEGLECT + complete_data$PASUM + complete_data$SCL_PSY,
+              data = complete_data, method = "logistic", Hess = TRUE)
+summary(out1)
+```
+
+Odds ratio
+
+```{r odds}
+exp(coef(out1))
+```
+
+Let's interpret the coefficients that were significant for OLS. For SES, the odds of high suicidality vs low to mid suicidality are 0.997 times lower for those with high SES. For neglect, the odds of high suicidality vs low to mid suicidality are 0.934 times lower for those with high neglect scores. For positive affect, the odds of high suicidality vs low to mid suicidality are 1.043 times higher for those with high positive affect scores. Let's look at the graphs
+
+```{r cut}
+set.seed(1234)
+simbt <- mvrnorm(n = 1000, mu = c(out1$coefficients, out1$zeta), Sigma = vcov(out1))
+simb <- simbt[, 1:8] # 1000 * 5 matrix of simulated coefficients
+simt <- simbt[, 7:10] # 1000 * 3 matrix of simulated cutpoints
+
+```
+
+```{r means}
+xbc <- (simb[, 1] * mean(complete_data$SEX)
+        + simb[, 2] * mean(complete_data$race)
+        + simb[, 3] * mean(complete_data$SISDB_SHARM)
+        + simb[, 4] * mean(complete_data$SES)
+        + simb[, 5] * 1
+        + simb[, 6] * mean(complete_data$NEGLECT)
+        + simb[, 7] * mean(complete_data$PASUM)
+        + simb[, 8] * mean(complete_data$SCL_PSY))
+xbn <- (simb[, 1] * mean(complete_data$SEX)
+        + simb[, 2] * mean(complete_data$race)
+        + simb[, 3] * mean(complete_data$SISDB_SHARM)
+        + simb[, 4] * mean(complete_data$SES)
+        + simb[, 5] * 0
+        + simb[, 6] * mean(complete_data$NEGLECT)
+        + simb[, 7] * mean(complete_data$PASUM)
+        + simb[, 8] * mean(complete_data$SCL_PSY))
+
+```
+
+```{r pred}
+res_pr_mood <- matrix(NA, nrow = 8, ncol = 3) # matrix to store results
+rownames(res_pr_mood) <- paste0(rep(c("mood", "non-mood"), each = 4), "-",
+                                 rep(c(1:4), times = 2))
+colnames(res_pr_mood) <- c("Mean", "Lower", "Upper")
+cut <- cbind(-Inf, simt, Inf) # 1000 * 5 matrix of simulated cutpoints
+for (j in 1:4){ # for each value of the dependent variable...
+  # mood = 1
+  pr_c <- plogis(cut[, j + 1] - xbc) - plogis(cut[, j] - xbc) # vector simulated predicted probs
+  res_pr_mood[j, 1] <- mean(pr_c) # simulated mean
+  res_pr_mood[j, 2:3] <- quantile(pr_c, probs = c(0.025, 0.975)) # simulated 95% CI
+  # mood = 0
+  pr_n <- plogis(cut[, j + 1] - xbn) - plogis(cut[, j] - xbn)
+  res_pr_mood[j + 4, 1] <- mean(pr_n) 
+  res_pr_mood[j + 4, 2:3] <- quantile(pr_n, probs = c(0.025, 0.975)) 
+}
+res_pr_mood # display results
+
+```
+
+```{r graph}
+res_pr_mood <- as.data.frame(res_pr_mood)
+res_pr_mood$DV <- rep(c(1:4), times = 2)
+g1 <- ggplot(res_pr_mood[1:4,]) + 
+  geom_pointrange(aes(x = DV, y = Mean, ymin = Lower, ymax = Upper), color = "blue") + 
+  xlab("Suicidality") + ylab("Predicted Probability") + ggtitle("Mood disorders") + 
+  ylim(0.0, 0.65) + theme_bw()
+g2 <- ggplot(res_pr_mood[5:8,]) + 
+  geom_pointrange(aes(x = DV, y = Mean, ymin = Lower, ymax = Upper), color = "red") + 
+  xlab("Suicidality") + ylab("") + ggtitle("No mood disorder") + 
+  ylim(0.0, 0.65) + theme_bw()
+g1 | g2 # combine plots
+
+```
+
+
+There doesn't seem to be a difference between those with mood disorders and those without (which is exactly what OLS told us). Let's look at the results as a table.
+
+```{r table, warning = FALSE}
+res <-matrix(NA, nrow = 9, ncol = 3)
+res[1,] <- c("Variables", "OLS", "OLM")
+res[2:9,1] <- colnames(complete_data[,-1])
+for(a in 2:9){
+  res[a,2] <- round(ols$coefficients[a], 3)
+}
+for(b in 2:9){
+  res[b,3] <- round(out1$coefficients[b-1], 3)
+}
+res
+
+
+```
+
+From the table of coefficients, we cannot really tell much. OLM coefficients cannot be directly interpretted, even their signs. This is because the sign may differ across levels of the variable. Let's see if the cut points are significant.
+
+```{r cut.sig}
+
+```
+
+Now I am going to calculate the change in predicted probability for each value of suicidality due to changing race for an otherwise average respondent.
+
+```{r lin}
+Xb0 <- (coef(out1)[1] * mean(complete_data$SEX)
+        + coef(out1)[2] * 0
+        + coef(out1)[3] * mean(complete_data$SISDB_SHARM)
+        + coef(out1)[4] * mean(complete_data$SES)
+        + coef(out1)[5] * mean(complete_data$MOODDX))
+        + coef(out1)[6] * mean(complete_data$NEGLECT)
+        + coef(out1)[7] * mean(complete_data$PASUM)
+        + coef(out1)[8] * mean(complete_data$SCL_PSY)
+Xb1 <- (coef(out1)[1] * mean(complete_data$SEX)
+        + coef(out1)[2] * 1
+        + coef(out1)[3] * mean(complete_data$SISDB_SHARM)
+        + coef(out1)[4] * mean(complete_data$SES)
+        + coef(out1)[5] * mean(complete_data$MOODDX))
+        + coef(out1)[6] * mean(complete_data$NEGLECT)
+        + coef(out1)[7] * mean(complete_data$PASUM)
+        + coef(out1)[8] * mean(complete_data$SCL_PSY))
+```
+
+```{r prob}
+## quality = 1
+mean((plogis(out1$zeta[1] - Xb1) - plogis(-Inf - Xb1)) - 
+       (plogis(out1$zeta[1] - Xb0) - plogis(-Inf - Xb0))) 
+## quality = 2
+mean((plogis(out1$zeta[2] - Xb1) - plogis(out1$zeta[1] - Xb1)) - 
+       (plogis(out1$zeta[2] - Xb0) - plogis(out1$zeta[1] - Xb0))) 
+## quality = 3
+mean((plogis(out1$zeta[3] - Xb1) - plogis(out1$zeta[2] - Xb1)) - 
+       (plogis(out1$zeta[3] - Xb0) - plogis(out1$zeta[2] - Xb0))) 
+## quality = 4
+mean((plogis(Inf - Xb1) - plogis(out1$zeta[3] - Xb1)) - 
+       (plogis(Inf - Xb0) - plogis(out1$zeta[3] - Xb0))) 
+
+```
+
+The changes in predicted probability tell us that there is a positive change suicidality with a change in race for the average person for the the lowest two categories, but there is a negative change in suicidality with a change in race for the average person for high values of suicidality.

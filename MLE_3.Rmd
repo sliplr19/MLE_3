@@ -184,15 +184,15 @@ Xb0 <- (coef(out1)[1] * mean(complete_data$SEX)
         + coef(out1)[2] * 0
         + coef(out1)[3] * mean(complete_data$SISDB_SHARM)
         + coef(out1)[4] * mean(complete_data$SES)
-        + coef(out1)[5] * mean(complete_data$MOODDX))
+        + coef(out1)[5] * mean(complete_data$MOODDX)
         + coef(out1)[6] * mean(complete_data$NEGLECT)
         + coef(out1)[7] * mean(complete_data$PASUM)
-        + coef(out1)[8] * mean(complete_data$SCL_PSY)
+        + coef(out1)[8] * mean(complete_data$SCL_PSY))
 Xb1 <- (coef(out1)[1] * mean(complete_data$SEX)
         + coef(out1)[2] * 1
         + coef(out1)[3] * mean(complete_data$SISDB_SHARM)
         + coef(out1)[4] * mean(complete_data$SES)
-        + coef(out1)[5] * mean(complete_data$MOODDX))
+        + coef(out1)[5] * mean(complete_data$MOODDX)
         + coef(out1)[6] * mean(complete_data$NEGLECT)
         + coef(out1)[7] * mean(complete_data$PASUM)
         + coef(out1)[8] * mean(complete_data$SCL_PSY))
@@ -215,3 +215,16 @@ mean((plogis(Inf - Xb1) - plogis(out1$zeta[3] - Xb1)) -
 ```
 
 The changes in predicted probability tell us that there is a positive change suicidality with a change in race for the average person for the the lowest two categories, but there is a negative change in suicidality with a change in race for the average person for high values of suicidality.
+
+I did a graph of the change in predictive probabilities above.
+
+
+Let's test if the cut points are significant.
+
+```{r cut_sig}
+#install.packages("aod")
+library(aod)
+wald.test(Sigma = vcov(out1), b = c(coef(out1), out1$zeta), Terms = 2:9)
+```
+
+The wald test is significant, meaning the cut points are statistically different from the null.
